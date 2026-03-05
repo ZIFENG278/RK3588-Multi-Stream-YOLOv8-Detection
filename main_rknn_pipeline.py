@@ -104,12 +104,12 @@ class DecodeWorker(Thread):
             preprocess_time = (time.perf_counter() - t1) * 1000
             orig_shape = (frame.shape[0], frame.shape[1])
 
-            # Create task and put to queue
+            # Create task and put to queue (copy frame to avoid race condition)
             task = FrameTask(
                 stream_id=self.stream_id,
-                frame=frame,
+                frame=frame.copy(),
                 orig_shape=orig_shape,
-                processed=processed,
+                processed=processed.copy() if isinstance(processed, np.ndarray) else processed,
                 video_fps=video_fps
             )
             task.decode_time = decode_time
@@ -188,9 +188,9 @@ class PipelineDetector:
             )
             self.models.append(model)
 
-        # Queues
-        self.task_queue = Queue(maxsize=100)  # Tasks to NPU
-        self.result_queue = Queue(maxsize=100)  # Results from NPU
+        # Queues (smaller size to prevent memory pressure)
+        self.task_queue = Queue(maxsize=20)  # Tasks to NPU
+        self.result_queue = Queue(maxsize=20)  # Results from NPU
 
         # Stop event
         self.stop_event = Event()
