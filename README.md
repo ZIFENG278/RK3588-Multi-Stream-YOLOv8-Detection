@@ -2,6 +2,8 @@
 
 Multi-stream YOLOv8 object detection on RK3588 NPU using Python pipeline architecture.
 
+![preview](./assets/preview.png)
+
 ## Features
 
 - **Multi-stream processing**: Support 9+ video streams simultaneously
