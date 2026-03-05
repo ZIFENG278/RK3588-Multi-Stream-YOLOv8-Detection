@@ -44,7 +44,7 @@ python main_rknn_pipeline.py --no-display --max-frames 100
 python main_rknn_pipeline.py \
     --num-streams 6 \
     --num-cores 3 \
-    --model yolov8n.rknn \
+    --model yolov8n-i8-3588.rknn \
     --video-dir video \
     --conf-threshold 0.5 \
     --iou-threshold 0.45
@@ -120,9 +120,9 @@ yolo_multi/
 ## Models
 
 Place your RKNN models in the project root. Available models:
-- `yolov8n.rknn` - YOLOv8 Nano
-- `yolov8s.rknn` - YOLOv8 Small
-- `yolov8m.rknn` - YOLOv8 Medium
+- `yolov8n-i8-3588.rknn` - YOLOv8 Nano
+- `yolov8s-i8-3588.rknn` - YOLOv8 Small
+- `yolov8m-i8-3588.rknn` - YOLOv8 Medium
 
 ## License
 
