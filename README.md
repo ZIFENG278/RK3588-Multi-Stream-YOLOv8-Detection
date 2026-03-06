@@ -15,15 +15,15 @@ Multi-stream YOLOv8 object detection on RK3588 NPU using Python pipeline archite
 ## Requirements
 
 - RK3588 development board
-- RKNN toolkit2 installed
+- RKNN toolkit-lite-2 installed
 - OpenCV for Python
 - Video files for testing
 
 ## Installation
 
 ```bash
-# Install RKNN toolkit2 (if not installed)
-pip install rknn_toolkit2-*.whl
+# Install rknn-toolkit-lite2 (if not installed)
+pip3 install rknn-toolkit-lite2
 ```
 
 ## Usage
