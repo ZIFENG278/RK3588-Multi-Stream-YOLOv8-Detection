@@ -377,7 +377,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description='Multi-stream YOLOv8 Pipeline on RK3588 NPU'
     )
-    parser.add_argument('--model', type=str, default='yolov8n.rknn')
+    parser.add_argument('--model', type=str, default='yolov8n-i8-3588.rknn')
     parser.add_argument('--video-dir', type=str, default='video')
     parser.add_argument('--num-streams', type=int, default=9)
     parser.add_argument('--num-cores', type=int, default=3)

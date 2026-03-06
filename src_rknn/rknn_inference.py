@@ -7,7 +7,7 @@ import time
 
 # Try to import RKNN, fail gracefully if not available
 try:
-    from rknn.api import RKNN
+    from rknnlite.api import RKNNLite as RKNN
     from py_utils.rknn_executor import RKNN_model_container
     RKNN_AVAILABLE = True
 except ImportError:
@@ -306,7 +306,7 @@ class YOLOv8RKNN:
             List of model outputs
         """
         start = time.time()
-        outputs = self.models[core_id].run([batch])
+        outputs = self.models[core_id].run([np.expand_dims(batch, axis=0)])
         self.inference_time += time.time() - start
         return outputs
 
