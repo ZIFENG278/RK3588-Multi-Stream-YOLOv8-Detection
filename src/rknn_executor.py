@@ -1,5 +1,4 @@
 from rknnlite.api import RKNNLite as RKNN
-import numpy as np
 
 class RKNN_model_container():
     def __init__(self, model_path, target=None, device_id=None, core_mask=None) -> None:
@@ -13,6 +12,7 @@ class RKNN_model_container():
             ret = rknn.init_runtime()
         else:
             # core_mask: RKNN.NPU_CORE_0, RKNN.NPU_CORE_1, RKNN.NPU_CORE_2
+            print("INFO: Set target kernel {}".format(core_mask))
             ret = rknn.init_runtime(core_mask=core_mask)
         if ret != 0:
             print('Init runtime environment failed')
