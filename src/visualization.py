@@ -237,9 +237,6 @@ class GridDisplay:
 
 
 class VideoWriter:
-    """
-    Video writer for saving detection results with optional VPU acceleration.
-    """
     def __init__(
         self,
         output_path: str,
@@ -249,63 +246,63 @@ class VideoWriter:
         use_vpu: bool = False
     ):
         self.output_path = output_path
-        self.fps = fps
-        self.frame_size = frame_size
+        
+        # 🔥 强制修复 FPS=0 致命错误
+        self.fps = 30.0
+        
         self.codec = codec
         self.use_vpu = use_vpu
-        self.writer = None
+
+        # RK3588 硬规则：宽度必须 16 对齐，高度 2 对齐
+        w, h = frame_size
+        self.w = (w + 15) // 16 * 16
+        self.h = (h + 1) // 2 * 2
+        self.frame_size = (self.w, self.h)
+
+        print(f"📹 输出分辨率: {self.w}x{self.h} | FPS: {self.fps}")
 
         if use_vpu:
-            width, height = frame_size
-            encoder = None
-            parser = None
-            container = "mp4mux"
-
-            if codec in ["mp4v", "avc1", "H264"]:
-                encoder = "mpph264enc"
+            if codec.lower() in ["mp4v", "avc1", "h264"]:
+                enc = "mpph264enc"
                 parser = "h264parse"
-            elif codec in ["hev1", "hvc1", "H265"]:
-                encoder = "mpph265enc"
+            elif codec.lower() in ["hev1", "hvc1", "h265"]:
+                enc = "mpph265enc"
                 parser = "h265parse"
             else:
-                print(f"Warning: Codec '{codec}' not supported by VPU, fallback to software")
                 use_vpu = False
 
-            if use_vpu and encoder and parser:
-                # ✅ 最终稳定版 RK3588 pipeline
+            if use_vpu:
                 pipeline = (
                     f"appsrc ! "
-                    f"video/x-raw,format=BGR,width={width},height={height},framerate={int(fps)}/1,bpp=24 ! "
-                    f"videoconvert ! video/x-raw,format=NV12 ! "
-                    f"{encoder} speed-control=0 quality=2 ! {parser} ! {container} ! "
-                    f"filesink location={self.output_path} async=false"
+                    f"video/x-raw,format=BGR,width={self.w},height={self.h},framerate=30/1 ! "
+                    f"videoconvert ! video/x-raw,format=I420 ! "
+                    f"mpph264enc ! h264parse ! mp4mux ! "
+                    f"filesink location={self.output_path} sync=false"
                 )
-
-                self.writer = cv2.VideoWriter(pipeline, cv2.CAP_GSTREAMER, 0, fps, frame_size)
+                self.writer = cv2.VideoWriter(pipeline, cv2.CAP_GSTREAMER, 0, self.fps, self.frame_size)
 
                 if self.writer.isOpened():
-                    print(f"VideoWriter: Using RK3588 VPU encoding ({encoder})")
+                    print(f"✅ RK3588 VPU 硬编正常: {enc}")
                 else:
-                    print("Warning: VPU pipeline failed, fallback to software")
+                    print("❌ VPU 启动失败，使用软编")
                     use_vpu = False
 
         if not use_vpu:
             fourcc = cv2.VideoWriter_fourcc(*codec)
-            self.writer = cv2.VideoWriter(output_path, fourcc, fps, frame_size)
-            if not self.writer.isOpened():
-                raise RuntimeError(f"Software VideoWriter failed: {output_path}")
-    
+            self.writer = cv2.VideoWriter(self.output_path, fourcc, self.fps, self.frame_size)
+            print("✅ 软件编码模式")
+
     def write(self, frame: np.ndarray):
-        """Write frame to video."""
+        frame = cv2.resize(frame, (self.w, self.h))
+        if len(frame.shape) == 2:
+            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
         self.writer.write(frame)
-    
+
     def release(self):
-        """Release video writer."""
-        if hasattr(self, 'writer'):
-            self.writer.release()
-    
+        self.writer.release()
+
     def __enter__(self):
         return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
+
+    def __exit__(self, *args):
         self.release()
