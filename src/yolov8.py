@@ -18,7 +18,8 @@ class YOLOv8Tool:
         pad_x = (self.config.input_size - new_w) // 2
         pad_y = (self.config.input_size - new_h) // 2
         padded[pad_y:pad_y+new_h, pad_x:pad_x+new_w] = resized
-        return cv2.cvtColor(padded, cv2.COLOR_BGR2RGB)
+        return padded
+        # return cv2.cvtColor(padded, cv2.COLOR_BGR2RGB)
 
     def postprocess(
         self,

@@ -34,6 +34,8 @@ class Config:
 
     num_postprocess: int = 3  # Number of postprocess threads
 
+    use_vpu: bool = True  # Whether to use VPU for inference
+
     def __post_init__(self):
         if self.class_names is None:
             self.class_names = [

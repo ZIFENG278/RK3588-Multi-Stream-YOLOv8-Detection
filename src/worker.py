@@ -96,7 +96,6 @@ class NPUWorker(Thread):
 
 
 
-
 class DecodeWorker(Thread):
     """Video decode worker."""
 
@@ -112,10 +111,45 @@ class DecodeWorker(Thread):
         self.yolov8_tool = YOLOv8Tool(self.config)
         self.cap = None
 
+    def _open_video(self, reopen: bool = False):
+        """Open video with GStreamer or fallback to OpenCV."""
+        action = "Reopened" if reopen else "Opened"
+        
+        if self.config.use_vpu:
+            pipelines = [
+                (
+                    f"filesrc location={self.video_path} ! "
+                    f"qtdemux ! h264parse ! mppvideodec ! videoconvert ! "
+                    f"video/x-raw,format=BGR ! appsink sync=False",
+                    "mppvideodec (hardware)"
+                ),
+                (
+                    f"filesrc location={self.video_path} ! "
+                    f"decodebin ! videoconvert ! "
+                    f"video/x-raw,format=BGR ! appsink sync=False",
+                    "decodebin (auto-detect)"
+                ),
+            ]
+            
+            for pipeline, label in pipelines:
+                cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+                if cap.isOpened():
+                    print(f"Stream {self.stream_id}: {action} with {label}")
+                    return cap
+                cap.release()
+        
+        # Fallback to OpenCV
+        cap = cv2.VideoCapture(self.video_path)
+        if cap.isOpened():
+            print(f"Stream {self.stream_id}: {action} with OpenCV (software)")
+            return cap
+        
+        print(f"Error: Cannot open video {self.video_path}")
+        return None
+
     def run(self):
-        self.cap = cv2.VideoCapture(self.video_path)
-        if not self.cap.isOpened():
-            print(f"Error: Cannot open video {self.video_path}")
+        self.cap = self._open_video()
+        if self.cap is None or not self.cap.isOpened():
             return
 
         video_fps = self.cap.get(cv2.CAP_PROP_FPS)
@@ -124,10 +158,19 @@ class DecodeWorker(Thread):
             t0 = time.perf_counter()
             ret, frame = self.cap.read()
             if not ret:
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                # Video ended, reopen for looping
+                print(f"Stream {self.stream_id}: Video ended, restarting...")
+                self.cap.release()
+                self.cap = self._open_video(reopen=True)
+                if self.cap is None:
+                    break
+                
+                # Try reading first frame of new cycle
                 ret, frame = self.cap.read()
                 if not ret:
+                    print(f"Stream {self.stream_id}: Failed to read frame after reopening")
                     break
+            
             decode_time = (time.perf_counter() - t0) * 1000
 
             t1 = time.perf_counter()

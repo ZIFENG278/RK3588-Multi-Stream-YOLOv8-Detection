@@ -84,7 +84,10 @@ class PipelineDetector:
             _gd = GridDisplay(config, self.num_streams)
             grid_w = _gd.grid_cols * _gd.cell_size[0]
             grid_h = _gd.grid_rows * _gd.cell_size[1]
-            self.video_writer = VideoWriter(out_path, fps=video_fps, frame_size=(grid_w, grid_h))
+            self.video_writer = VideoWriter(
+                out_path, fps=video_fps, frame_size=(grid_w, grid_h),
+                use_vpu=config.use_vpu
+            )
             print(f"  Saving video to: {out_path} ({grid_w}x{grid_h}) @ {video_fps:.0f}fps")
 
     def start(self):
@@ -267,6 +270,12 @@ def parse_args():
     parser.add_argument('--max-frames', type=int, default=None)
     parser.add_argument('--save-video', action='store_true')
     parser.add_argument('--output-dir', type=str, default='output')
+    parser.add_argument(
+    '--use-vpu',
+    action=argparse.BooleanOptionalAction,
+    default=True,
+    help='Use VPU for inference'
+)
     return parser.parse_args()
 
 
@@ -297,7 +306,10 @@ def main():
         max_frames=args.max_frames,
 
         save_video=args.save_video,
-        output_dir= args.output_dir
+        output_dir= args.output_dir,
+
+        use_vpu=args.use_vpu
+
     )
 
     print(f"\nRKNN pipeline: {config.num_streams} streams, {config.num_cores} NPU cores, {config.num_postprocess} postprocess workers\n")
