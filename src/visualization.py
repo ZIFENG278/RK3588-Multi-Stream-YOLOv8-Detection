@@ -247,8 +247,8 @@ class VideoWriter:
     ):
         self.output_path = output_path
         
-        # 🔥 强制修复 FPS=0 致命错误
-        self.fps = 30.0
+        self.fps = fps
+        print(self.fps)
         
         self.codec = codec
         self.use_vpu = use_vpu
@@ -258,8 +258,6 @@ class VideoWriter:
         self.w = (w + 15) // 16 * 16
         self.h = (h + 1) // 2 * 2
         self.frame_size = (self.w, self.h)
-
-        print(f"📹 输出分辨率: {self.w}x{self.h} | FPS: {self.fps}")
 
         if use_vpu:
             if codec.lower() in ["mp4v", "avc1", "h264"]:
@@ -282,15 +280,15 @@ class VideoWriter:
                 self.writer = cv2.VideoWriter(pipeline, cv2.CAP_GSTREAMER, 0, self.fps, self.frame_size)
 
                 if self.writer.isOpened():
-                    print(f"✅ RK3588 VPU 硬编正常: {enc}")
+                    print(f"Use RK3588 VPU Decode: {enc}")
                 else:
-                    print("❌ VPU 启动失败，使用软编")
+                    print("Can not open VPU encoder, falling back to software encoding")
                     use_vpu = False
 
         if not use_vpu:
             fourcc = cv2.VideoWriter_fourcc(*codec)
             self.writer = cv2.VideoWriter(self.output_path, fourcc, self.fps, self.frame_size)
-            print("✅ 软件编码模式")
+            print("Use software encoding")
 
     def write(self, frame: np.ndarray):
         frame = cv2.resize(frame, (self.w, self.h))

@@ -79,7 +79,7 @@ class PipelineDetector:
             os.makedirs(config.output_dir, exist_ok=True)
             out_path = os.path.join(config.output_dir, 'detection_grid.mp4')
             # Use first video's FPS as output FPS
-            video_fps = float(cv2.VideoCapture(self.video_paths[0]).get(cv2.CAP_PROP_FPS))
+            video_fps = round(cv2.VideoCapture(self.video_paths[0]).get(cv2.CAP_PROP_FPS))
             # GridDisplay may be None when --no-display, use GridDisplay temporarily for grid size
             _gd = GridDisplay(config, self.num_streams)
             grid_w = _gd.grid_cols * _gd.cell_size[0]
