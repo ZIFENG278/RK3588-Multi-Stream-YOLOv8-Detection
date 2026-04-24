@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Multi-stream YOLOv8 detection on RK3588 NPU - Pipeline Architecture.
+Multi-stream YOLOv8 detection on Rockchip NPU - Pipeline Architecture.
 
 Architecture:
 - Decode workers: decode + preprocess in parallel
@@ -34,27 +34,42 @@ except ImportError:
     print("ERROR: rknnlite package not found. Install with: pip install rknnlite2")
     sys.exit(1)
 
-MAX_NPU_CORES = 6
+SUPPORTED_SOCS = {'rk3588', 'rk3576'}
+
+
+def get_soc_npu_config(soc: str):
+    SOC = soc.lower()
+
+    if SOC == 'rk3588':
+        MAX_NPU_CORES = 6
+        core_masks = [RKNN.NPU_CORE_0, RKNN.NPU_CORE_1, RKNN.NPU_CORE_2]
+    elif SOC == 'rk3576':
+        MAX_NPU_CORES = 4
+        core_masks = [RKNN.NPU_CORE_0, RKNN.NPU_CORE_1]
+    else:
+        raise ValueError(f"Unsupported SoC '{soc}'. Supported: {sorted(SUPPORTED_SOCS)}")
+
+    return SOC, MAX_NPU_CORES, core_masks
 
 
 class PipelineDetector:
-    def __init__(self, config: Config, video_paths: List[str]):
+    def __init__(self, config: Config, video_paths: List):
         self.config = config
         self.video_paths = video_paths
         self.num_streams = self.config.num_streams
-        self.num_cores = min(self.config.num_cores, MAX_NPU_CORES)
+        self.soc, self.max_npu_cores, self.core_masks = get_soc_npu_config(self.config.soc)
+        self.num_cores = min(self.config.num_cores, self.max_npu_cores)
 
-        print(f"Initializing pipeline: {self.num_streams} streams on {self.num_cores} cores...")
+        print(f"Initializing pipeline ({self.soc}): {self.num_streams} streams on {self.num_cores} cores...")
 
         # Load models (one per NPU core)
         self.models: List[RKNN_model_container] = []
-        core_masks = [RKNN.NPU_CORE_0, RKNN.NPU_CORE_1, RKNN.NPU_CORE_2]
         for core_id in range(self.num_cores):
-            core_mask = core_masks[core_id % len(core_masks)]
+            core_mask = self.core_masks[core_id % len(self.core_masks)]
             print(f"  Model {core_id} on NPU core mask {core_mask}...")
             self.models.append(RKNN_model_container(
                 model_path=config.model_path,
-                target='rk3588',
+                target=self.soc,
                 core_mask=core_mask
             ))
 
@@ -257,10 +272,33 @@ def get_video_files(video_dir: str, num_streams: int) -> list:
     return video_files[:num_streams]
 
 
+def parse_camera_indexes(raw_indexes: Optional[str]) -> List[int]:
+    if not raw_indexes:
+        return []
+
+    camera_indexes = []
+    for token in raw_indexes.split(','):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            camera_indexes.append(int(token))
+        except ValueError as exc:
+            raise ValueError(f"Invalid camera index '{token}'. Use comma-separated integers.") from exc
+    return camera_indexes
+
+
 def parse_args():
-    parser = argparse.ArgumentParser(description='Multi-stream YOLOv8 on RK3588 NPU')
+    parser = argparse.ArgumentParser(description='Multi-stream YOLOv8 on Rockchip NPU')
     parser.add_argument('--model', type=str, default='yolov8n-i8-3588.rknn')
+    parser.add_argument('--model-type', type=str, default='yolov8', choices=['yolov8', 'yolo26'])
+    parser.add_argument('--soc', type=str, default='rk3588', choices=sorted(SUPPORTED_SOCS))
     parser.add_argument('--video-dir', type=str, default='video')
+    parser.add_argument('--camera-indexes', type=str, default='')
+    parser.add_argument('--camera-width', type=int, default=1920)
+    parser.add_argument('--camera-height', type=int, default=1080)
+    parser.add_argument('--camera-fps', type=int, default=30)
+    parser.add_argument('--camera-fourcc', type=str, default='MJPG')
     parser.add_argument('--num-streams', type=int, default=6)
     parser.add_argument('--num-cores', type=int, default=3)
     parser.add_argument('--num-postprocess', type=int, default=3)
@@ -270,6 +308,8 @@ def parse_args():
     parser.add_argument('--max-frames', type=int, default=None)
     parser.add_argument('--save-video', action='store_true')
     parser.add_argument('--output-dir', type=str, default='output')
+    parser.add_argument('--label-file', type=str, default=None,
+                        help='Path to label txt file (one class name per line)')
     parser.add_argument(
     '--use-vpu',
     action=argparse.BooleanOptionalAction,
@@ -282,38 +322,65 @@ def parse_args():
 def main():
     args = parse_args()
 
-    if not os.path.isdir(args.video_dir):
-        print(f"Error: Video directory not found: {args.video_dir}")
+    try:
+        camera_indexes = parse_camera_indexes(args.camera_indexes)
+    except ValueError as e:
+        print(f"Error: {e}")
         sys.exit(1)
+
     if not os.path.isfile(args.model):
         print(f"Error: Model file not found: {args.model}")
         sys.exit(1)
 
-    video_files = get_video_files(args.video_dir, args.num_streams)
+    if camera_indexes:
+        input_sources = camera_indexes
+        args.num_streams = len(camera_indexes)
+    else:
+        if not os.path.isdir(args.video_dir):
+            print(f"Error: Video directory not found: {args.video_dir}")
+            sys.exit(1)
+        input_sources = get_video_files(args.video_dir, args.num_streams)
 
-    config = Config(
-        model_path=args.model,
-        video_dir=args.video_dir,
+    try:
+        config = Config(
+            soc=args.soc,
+            model_type=args.model_type,
+            model_path=args.model,
+            video_dir=args.video_dir,
+            camera_indexes=camera_indexes or None,
+            camera_width=args.camera_width,
+            camera_height=args.camera_height,
+            camera_fps=args.camera_fps,
+            camera_fourcc=args.camera_fourcc,
 
-        num_streams=args.num_streams,
-        num_postprocess=args.num_postprocess,
-        num_cores=args.num_cores,
+            num_streams=args.num_streams,
+            num_postprocess=args.num_postprocess,
+            num_cores=args.num_cores,
 
-        conf_threshold=args.conf_threshold,
-        iou_threshold=args.iou_threshold,
+            conf_threshold=args.conf_threshold,
+            iou_threshold=args.iou_threshold,
 
-        display_results=not args.no_display,
-        max_frames=args.max_frames,
+            display_results=not args.no_display,
+            max_frames=args.max_frames,
 
-        save_video=args.save_video,
-        output_dir= args.output_dir,
+            save_video=args.save_video,
+            output_dir=args.output_dir,
+            label_file=args.label_file,
 
-        use_vpu=args.use_vpu
+            use_vpu=args.use_vpu
 
+        )
+    except (FileNotFoundError, ValueError) as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    source_type = "camera" if camera_indexes else "video"
+    print(
+        f"\nRKNN pipeline: {config.num_streams} {source_type} streams, "
+        f"model={config.model_type}, "
+        f"{config.num_cores} NPU cores, {config.num_postprocess} postprocess workers\n"
     )
-
-    print(f"\nRKNN pipeline: {config.num_streams} streams, {config.num_cores} NPU cores, {config.num_postprocess} postprocess workers\n")
-    detector = PipelineDetector(config, video_files)
+    detector = PipelineDetector(config, input_sources)
     detector.run()
     print("Done.")
 
