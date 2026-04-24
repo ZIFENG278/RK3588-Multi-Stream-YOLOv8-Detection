@@ -7,7 +7,15 @@ import cv2
 import numpy as np
 
 from src.yolov8 import YOLOv8Tool
+from src.yolo26 import YOLO26Tool
 from src.visualization import Visualizer
+
+
+def build_detector_tool(config: Config):
+    model_type = getattr(config, 'model_type', 'yolov8').lower()
+    if model_type == 'yolo26':
+        return YOLO26Tool(config)
+    return YOLOv8Tool(config)
 
 
 class FrameTask:
@@ -37,7 +45,7 @@ class PostProcessWorker(Thread):
         self.input_queue = input_queue
         self.output_queue = output_queue
         self.config = config
-        self.yolov8_tool = YOLOv8Tool(self.config)
+        self.detector_tool = build_detector_tool(self.config)
         self.visualizer = Visualizer(config)
 
     def run(self):
@@ -48,7 +56,7 @@ class PostProcessWorker(Thread):
                 continue
 
             t1 = time.perf_counter()
-            detections = self.yolov8_tool.postprocess(
+            detections = self.detector_tool.postprocess(
                 task.processed, [task.orig_shape]
             )[0]
             task.postprocess_time = (time.perf_counter() - t1) * 1000
@@ -97,9 +105,9 @@ class NPUWorker(Thread):
 
 
 class DecodeWorker(Thread):
-    """Video decode worker."""
+    """Video/camera decode worker."""
 
-    def __init__(self, stream_id: int, video_path: str, output_task: Queue,
+    def __init__(self, stream_id: int, video_path, output_task: Queue,
                  input_size: int, stop_event, config: Config):
         super().__init__(daemon=True)
         self.stream_id = stream_id
@@ -108,12 +116,20 @@ class DecodeWorker(Thread):
         self.input_size = input_size
         self.config = config
         self.stop_event = stop_event
-        self.yolov8_tool = YOLOv8Tool(self.config)
+        self.detector_tool = build_detector_tool(self.config)
         self.cap = None
 
     def _open_video(self, reopen: bool = False):
-        """Open video with GStreamer or fallback to OpenCV."""
+        """Open camera/video source with GStreamer or fallback to OpenCV."""
         action = "Reopened" if reopen else "Opened"
+
+        if isinstance(self.video_path, int):
+            cap = cv2.VideoCapture(self.video_path)
+            if cap.isOpened():
+                print(f"Stream {self.stream_id}: {action} camera index {self.video_path}")
+                return cap
+            print(f"Error: Cannot open camera index {self.video_path}")
+            return None
         
         if self.config.use_vpu:
             pipelines = [
@@ -158,8 +174,13 @@ class DecodeWorker(Thread):
             t0 = time.perf_counter()
             ret, frame = self.cap.read()
             if not ret:
-                # Video ended, reopen for looping
-                print(f"Stream {self.stream_id}: Video ended, restarting...")
+                # Camera disconnect or video ended, reopen.
+                source_label = (
+                    f"camera index {self.video_path}"
+                    if isinstance(self.video_path, int)
+                    else "video"
+                )
+                print(f"Stream {self.stream_id}: {source_label} ended/disconnected, restarting...")
                 self.cap.release()
                 self.cap = self._open_video(reopen=True)
                 if self.cap is None:
@@ -174,7 +195,7 @@ class DecodeWorker(Thread):
             decode_time = (time.perf_counter() - t0) * 1000
 
             t1 = time.perf_counter()
-            processed = self.yolov8_tool.preprocess(frame)
+            processed = self.detector_tool.preprocess(frame)
             processed = np.expand_dims(processed, axis=0)
             preprocess_time = (time.perf_counter() - t1) * 1000
             orig_shape = (frame.shape[0], frame.shape[1])

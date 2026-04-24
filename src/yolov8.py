@@ -19,7 +19,6 @@ class YOLOv8Tool:
         pad_y = (self.config.input_size - new_h) // 2
         padded[pad_y:pad_y+new_h, pad_x:pad_x+new_w] = resized
         return padded
-        # return cv2.cvtColor(padded, cv2.COLOR_BGR2RGB)
 
     def postprocess(
         self,
@@ -31,16 +30,12 @@ class YOLOv8Tool:
 
         for i in range(batch_size):
             single_output = [out[i:i+1] for out in outputs]
-            # for output in single_output:
-            #     print(output.shape)
-            # print("----")
             boxes, classes, scores = self.post_process(
                 single_output,
                 self.config.conf_threshold,
                 self.config.iou_threshold,
                 (self.config.input_size, self.config.input_size)
             )
-
 
             if boxes is None:
                 results.append([])
