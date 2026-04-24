@@ -294,12 +294,16 @@ def parse_args():
     parser.add_argument('--model-type', type=str, default='yolov8', choices=['yolov8', 'yolo26'])
     parser.add_argument('--soc', type=str, default='rk3588', choices=sorted(SUPPORTED_SOCS))
     parser.add_argument('--video-dir', type=str, default='video')
+    parser.add_argument('--img-src', type=str, default=None,
+                        help='Path to an image or directory of images for detection')
+    parser.add_argument('--img-output-dir', type=str, default='output',
+                        help='Directory to save detection results when using --img-src')
     parser.add_argument('--camera-indexes', type=str, default='')
     parser.add_argument('--num-streams', type=int, default=6)
     parser.add_argument('--num-cores', type=int, default=3)
     parser.add_argument('--num-postprocess', type=int, default=3)
-    parser.add_argument('--conf-threshold', type=float, default=0.4)
-    parser.add_argument('--iou-threshold', type=float, default=0.45)
+    parser.add_argument('--conf-threshold', type=float, default=0.25)
+    parser.add_argument('--iou-threshold', type=float, default=0.7)
     parser.add_argument('--no-display', action='store_true')
     parser.add_argument('--max-frames', type=int, default=None)
     parser.add_argument('--save-video', action='store_true')
@@ -315,6 +319,102 @@ def parse_args():
     return parser.parse_args()
 
 
+def run_images(config: Config, img_src: str, output_dir: str):
+    """Run detection on images (single image or directory) and save results."""
+    from src.rknn_executor import RKNN_model_container
+    from src.worker import build_detector_tool
+    from src.visualization import Visualizer
+
+    # Determine if img_src is a file or directory
+    if os.path.isfile(img_src):
+        img_paths = [img_src]
+    elif os.path.isdir(img_src):
+        img_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp'}
+        img_paths = [
+            os.path.join(img_src, f)
+            for f in sorted(os.listdir(img_src))
+            if Path(f).suffix.lower() in img_extensions
+        ]
+        if not img_paths:
+            print(f"Error: No images found in directory: {img_src}")
+            return
+    else:
+        print(f"Error: Invalid path: {img_src}")
+        return
+
+    print(f"Loading model: {config.model_path}")
+    model = RKNN_model_container(
+        model_path=config.model_path,
+        target=config.soc,
+        core_mask=RKNN.NPU_CORE_0
+    )
+
+    detector = build_detector_tool(config)
+    visualizer = Visualizer(config)
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    total_images = len(img_paths)
+    total_preprocess = 0
+    total_infer = 0
+    total_postprocess = 0
+    total_detections = 0
+
+    for i, img_path in enumerate(img_paths, 1):
+        print(f"\n[{i}/{total_images}] Processing: {img_path}")
+        frame = cv2.imread(img_path)
+        if frame is None:
+            print(f"  Warning: Cannot read image, skipping")
+            continue
+
+        orig_h, orig_w = frame.shape[:2]
+
+        # Preprocess
+        t0 = time.perf_counter()
+        processed = detector.preprocess(frame)
+        processed = np.expand_dims(processed, axis=0)
+        preprocess_time = (time.perf_counter() - t0) * 1000
+
+        # Inference
+        t1 = time.perf_counter()
+        outputs = model.run(processed)
+        infer_time = (time.perf_counter() - t1) * 1000
+
+        # Postprocess
+        t2 = time.perf_counter()
+        detections = detector.postprocess(outputs, [(orig_h, orig_w)])[0]
+        postprocess_time = (time.perf_counter() - t2) * 1000
+
+        # Draw
+        result_frame = visualizer.draw_detections(frame, detections)
+
+        # Save result
+        img_name = Path(img_path).name
+        output_path = os.path.join(output_dir, f"result_{img_name}")
+        cv2.imwrite(output_path, result_frame)
+
+        print(f"  Size: {orig_w}x{orig_h}, Detections: {len(detections)}, "
+              f"Preprocess: {preprocess_time:.2f}ms, Infer: {infer_time:.2f}ms, "
+              f"Postprocess: {postprocess_time:.2f}ms")
+
+        total_preprocess += preprocess_time
+        total_infer += infer_time
+        total_postprocess += postprocess_time
+        total_detections += len(detections)
+
+    print(f"\n{'='*55}")
+    print(f"  Total images:     {total_images}")
+    print(f"  Total detections: {total_detections}")
+    print(f"  Avg timing (ms):")
+    print(f"    Preprocess:    {total_preprocess / total_images:.2f} ms")
+    print(f"    Inference:     {total_infer / total_images:.2f} ms")
+    print(f"    Postprocess:  {total_postprocess / total_images:.2f} ms")
+    print(f"  Results saved to: {output_dir}")
+    print(f"{'='*55}")
+
+    model.release()
+
+
 def main():
     args = parse_args()
 
@@ -327,6 +427,22 @@ def main():
     if not os.path.isfile(args.model):
         print(f"Error: Model file not found: {args.model}")
         sys.exit(1)
+
+    # Image mode (single image or directory)
+    if args.img_src:
+        config = Config(
+            soc=args.soc,
+            model_type=args.model_type,
+            model_path=args.model,
+            input_size=640,
+            conf_threshold=args.conf_threshold,
+            iou_threshold=args.iou_threshold,
+            display_results=False,
+            label_file=args.label_file,
+            use_vpu=args.use_vpu
+        )
+        run_images(config, args.img_src, args.img_output_dir)
+        return
 
     if camera_indexes:
         input_sources = camera_indexes

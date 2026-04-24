@@ -14,8 +14,8 @@ class Config:
     model_type: str = "yolov8"
     model_path: str = "yolov8n.rknn"
     input_size: int = 640
-    conf_threshold: float = 0.4
-    iou_threshold: float = 0.45
+    conf_threshold: float = 0.25
+    iou_threshold: float = 0.7
 
     # Video settings
     video_dir: str = "video"

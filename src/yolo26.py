@@ -19,8 +19,7 @@ class YOLO26Tool:
         pad_y = (self.config.input_size - new_h) // 2
         padded[pad_y:pad_y+new_h, pad_x:pad_x+new_w] = resized
 
-        # reference preprocess: float32 + [0,1] + NCHW
-        return np.transpose(padded.astype(np.float32) / 255.0, (2, 0, 1))
+        return padded
 
     def postprocess(
         self,
@@ -46,73 +45,71 @@ class YOLO26Tool:
         pad_x = (self.config.input_size - w0 * scale) / 2
         pad_y = (self.config.input_size - h0 * scale) / 2
 
-        raw = []
+        all_boxes, all_scores, all_classes = [], [], []
+
         for i in range(3):
-            feat = outputs[i][0]
-            cls = outputs[i + 3][0]
+            feat = outputs[i][0]       # (4, h, w)
+            cls = outputs[i + 3][0]   # (80, h, w)
             _, h, w = feat.shape
             stride = self.strides[i]
 
-            for yy in range(h):
-                for xx in range(w):
-                    cls_vec = self._sigmoid(cls[:, yy, xx])
-                    best_cls = int(np.argmax(cls_vec))
-                    best_conf = float(np.max(cls_vec))
-                    if best_conf < self.config.conf_threshold:
-                        continue
+            # Vectorized: compute all coordinates at once
+            yy, xx = np.meshgrid(np.arange(h), np.arange(w), indexing='ij')
+            cx = (xx + 0.5) * stride
+            cy = (yy + 0.5) * stride
 
-                    l, t, r, b = feat[0, yy, xx], feat[1, yy, xx], feat[2, yy, xx], feat[3, yy, xx]
-                    cx = (xx + 0.5) * stride
-                    cy = (yy + 0.5) * stride
+            # Box coordinates: (l, t, r, b) -> (x1, y1, x2, y2)
+            l, t, r, b = feat[0].ravel(), feat[1].ravel(), feat[2].ravel(), feat[3].ravel()
+            cx_flat, cy_flat = cx.ravel(), cy.ravel()
 
-                    x1 = cx - l * stride
-                    y1 = cy - t * stride
-                    x2 = cx + r * stride
-                    y2 = cy + b * stride
+            x1 = cx_flat - l * stride
+            y1 = cy_flat - t * stride
+            x2 = cx_flat + r * stride
+            y2 = cy_flat + b * stride
 
-                    x1 = np.clip((x1 - pad_x) / scale, 0, w0)
-                    y1 = np.clip((y1 - pad_y) / scale, 0, h0)
-                    x2 = np.clip((x2 - pad_x) / scale, 0, w0)
-                    y2 = np.clip((y2 - pad_y) / scale, 0, h0)
+            # Scale to original image
+            x1 = np.clip((x1 - pad_x) / scale, 0, w0)
+            y1 = np.clip((y1 - pad_y) / scale, 0, h0)
+            x2 = np.clip((x2 - pad_x) / scale, 0, w0)
+            y2 = np.clip((y2 - pad_y) / scale, 0, h0)
 
-                    raw.append([x1, y1, x2, y2, best_conf, best_cls])
+            boxes = np.stack([x1, y1, x2, y2], axis=1).astype(np.float32)
 
-        if not raw:
+            # Vectorized sigmoid + class selection
+            cls_reshaped = cls.reshape(-1, cls.shape[0]).T  # (80, h*w)
+            cls_softmax = 1 / (1 + np.exp(-cls_reshaped))   # sigmoid
+            scores_all = cls_softmax.max(axis=0)              # (h*w,)
+            classes_all = cls_softmax.argmax(axis=0).astype(np.int32)  # (h*w,)
+
+            # Filter by confidence
+            mask = scores_all >= self.config.conf_threshold
+            if mask.any():
+                all_boxes.append(boxes[mask])
+                all_scores.append(scores_all[mask])
+                all_classes.append(classes_all[mask])
+
+        if not all_boxes:
             return []
 
-        raw = np.array(raw, dtype=np.float32)
-        keep = self._nms_indices(raw[:, :4], raw[:, 4], self.config.iou_threshold)
+        boxes = np.concatenate(all_boxes)
+        scores = np.concatenate(all_scores)
+        classes = np.concatenate(all_classes)
+
+        # Use cv2.dnn.NMSBoxes for efficient NMS
+        indices = cv2.dnn.NMSBoxes(
+            boxes.tolist(),
+            scores.tolist(),
+            score_threshold=self.config.conf_threshold,
+            nms_threshold=self.config.iou_threshold
+        )
+
+        if len(indices) == 0:
+            return []
+
+        indices = indices.flatten() if indices.ndim > 1 else indices
 
         detections = []
-        for idx in keep:
-            x1, y1, x2, y2, score, cls_id = raw[idx]
-            detections.append((int(x1), int(y1), int(x2), int(y2), float(score), int(cls_id)))
+        for idx in indices:
+            x1, y1, x2, y2 = boxes[idx]
+            detections.append((int(x1), int(y1), int(x2), int(y2), float(scores[idx]), int(classes[idx])))
         return detections
-
-    @staticmethod
-    def _sigmoid(x):
-        return 1 / (1 + np.exp(-x))
-
-    @staticmethod
-    def _iou(box: np.ndarray, boxes: np.ndarray) -> np.ndarray:
-        x1 = np.maximum(box[0], boxes[:, 0])
-        y1 = np.maximum(box[1], boxes[:, 1])
-        x2 = np.minimum(box[2], boxes[:, 2])
-        y2 = np.minimum(box[3], boxes[:, 3])
-
-        inter = np.maximum(0, x2 - x1) * np.maximum(0, y2 - y1)
-        area1 = (box[2] - box[0]) * (box[3] - box[1])
-        area2 = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
-        return inter / (area1 + area2 - inter + 1e-6)
-
-    def _nms_indices(self, boxes: np.ndarray, scores: np.ndarray, iou_threshold: float) -> np.ndarray:
-        order = scores.argsort()[::-1]
-        keep = []
-        while len(order) > 0:
-            i = order[0]
-            keep.append(i)
-            if len(order) == 1:
-                break
-            ious = self._iou(boxes[i], boxes[order[1:]])
-            order = order[1:][ious < iou_threshold]
-        return np.array(keep, dtype=np.int32)
