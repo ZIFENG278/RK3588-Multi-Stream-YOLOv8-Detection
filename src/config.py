@@ -41,6 +41,8 @@ class Config:
 
     use_vpu: bool = True  # Whether to use VPU for inference
 
+    sync: bool = False  # Sync video playback to original fps
+
     def __post_init__(self):
         if self.label_file:
             label_path = Path(self.label_file)

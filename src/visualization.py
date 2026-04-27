@@ -133,11 +133,15 @@ class GridDisplay:
     """
     Display multiple video streams in a grid layout.
     """
-    
+
+    # RK3588 VPU encoding: width must be 16-aligned, height must be 2-aligned
+    ALIGN_W = 16
+    ALIGN_H = 2
+
     def __init__(self, config: Config, num_streams: int = 9):
         """
         Initialize grid display.
-        
+
         Args:
             config: Configuration object
             num_streams: Number of streams to display
@@ -145,14 +149,54 @@ class GridDisplay:
         self.config = config
         self.num_streams = num_streams
         self.visualizer = Visualizer(config)
-        
+
         # Calculate grid dimensions
         self.grid_rows = int(np.ceil(np.sqrt(num_streams)))
         self.grid_cols = int(np.ceil(num_streams / self.grid_rows))
-        
+
         # Display settings
         self.window_name = "Multi-Stream Detection"
-        self.cell_size = (426, 240)  # 16:9 aspect ratio, scaled down from 640x360
+
+        # Get screen size and calculate max grid size
+        screen_w, screen_h = self._get_screen_size()
+        screen_w = int(screen_w * 0.98)
+        screen_h = int(screen_h * 0.98)
+
+        # Calculate max cell size that fits screen (for reference)
+        max_cell_w = screen_w // self.grid_cols
+        max_cell_h = screen_h // self.grid_rows
+
+        # Use max possible cell size while keeping 16:9 aspect ratio
+        aspect_ratio = 16 / 9
+        if max_cell_w / max_cell_h > aspect_ratio:
+            cell_h = max_cell_h
+            cell_w = int(cell_h * aspect_ratio)
+        else:
+            cell_w = max_cell_w
+            cell_h = int(cell_w / aspect_ratio)
+
+        # Align to VPU requirements
+        cell_w = (cell_w // self.ALIGN_W) * self.ALIGN_W
+        cell_h = (cell_h // self.ALIGN_H) * self.ALIGN_H
+
+        self.cell_size = (cell_w, cell_h)
+
+    def _get_screen_size(self):
+        """Get screen resolution using xrandr."""
+        try:
+            import subprocess
+            output = subprocess.check_output(['xrandr'], encoding='utf-8')
+            for line in output.split('\n'):
+                if '*' in line:
+                    parts = line.split()
+                    for i, p in enumerate(parts):
+                        if '*' in p and i > 0:
+                            size = parts[i-1].split('x')
+                            if len(size) == 2:
+                                return int(size[0]), int(size[1])
+        except:
+            pass
+        return 1920, 1080  # Default fallback
     
     def create_grid(
         self,
@@ -185,15 +229,39 @@ class GridDisplay:
             if idx < len(frames) and frames[idx] is not None:
                 # Frame already has detections drawn in main loop, just add label
                 frame = frames[idx]
+                orig_h, orig_w = frame.shape[:2]
 
                 # Draw stream label with both video fps and process fps
                 video_fps = video_fps_values[idx] if video_fps_values else None
                 proc_fps = process_fps_values[idx] if process_fps_values else None
                 frame = self.visualizer.draw_stream_label(frame, idx, video_fps, proc_fps)
-                
-                # Resize to cell size
-                # print(frame.shape)
-                frame = cv2.resize(frame, (self.cell_size[0], self.cell_size[1]))
+
+                # Resize maintaining aspect ratio, no upscaling
+                cell_w, cell_h = self.cell_size
+                frame_aspect = orig_w / orig_h
+                cell_aspect = cell_w / cell_h
+
+                if frame_aspect > cell_aspect:
+                    # Frame is wider - fit to width
+                    resize_w = cell_w
+                    resize_h = int(cell_w / frame_aspect)
+                else:
+                    # Frame is taller - fit to height
+                    resize_h = cell_h
+                    resize_w = int(cell_h * frame_aspect)
+
+                # Don't upscale
+                if resize_w > orig_w or resize_h > orig_h:
+                    resize_w = orig_w
+                    resize_h = orig_h
+
+                # Resize and center in cell
+                resized = cv2.resize(frame, (resize_w, resize_h))
+                cell = np.zeros((cell_h, cell_w, 3), dtype=np.uint8)
+                y_offset = (cell_h - resize_h) // 2
+                x_offset = (cell_w - resize_w) // 2
+                cell[y_offset:y_offset+resize_h, x_offset:x_offset+resize_w] = resized
+                frame = cell
             else:
                 # Empty cell with stream number
                 frame = np.zeros((self.cell_size[1], self.cell_size[0], 3), dtype=np.uint8)
@@ -219,18 +287,20 @@ class GridDisplay:
     def show(self, grid: np.ndarray, delay: int = 1) -> bool:
         """
         Display grid in window.
-        
+
         Args:
             grid: Grid image to display
             delay: Wait time in ms
-            
+
         Returns:
             False if 'q' was pressed, True otherwise
         """
+        cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty(self.window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         cv2.imshow(self.window_name, grid)
         key = cv2.waitKey(delay) & 0xFF
         return key != ord('q')
-    
+
     def destroy(self):
         """Close display window."""
         cv2.destroyAllWindows()
@@ -256,7 +326,7 @@ class VideoWriter:
         # RK3588 硬规则：宽度必须 16 对齐，高度 2 对齐
         w, h = frame_size
         self.w = (w + 15) // 16 * 16
-        self.h = (h + 1) // 2 * 2
+        self.h = (h + 15) // 16 * 16
         self.frame_size = (self.w, self.h)
 
         if use_vpu:

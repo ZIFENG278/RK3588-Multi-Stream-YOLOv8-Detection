@@ -316,6 +316,12 @@ def parse_args():
     default=True,
     help='Use VPU for inference'
 )
+    parser.add_argument(
+    '--sync',
+    action=argparse.BooleanOptionalAction,
+    default=False,
+    help='Sync video playback to original fps'
+)
     return parser.parse_args()
 
 
@@ -475,7 +481,8 @@ def main():
             output_dir=args.output_dir,
             label_file=args.label_file,
 
-            use_vpu=args.use_vpu
+            use_vpu=args.use_vpu,
+            sync=args.sync
 
         )
     except (FileNotFoundError, ValueError) as e:
