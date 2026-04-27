@@ -153,7 +153,9 @@ class DecodeWorker(Thread):
         h264_pipeline = (
             f"v4l2src device=/dev/video{self.video_path} ! "
             f"video/x-h264,width=1280,height=720,framerate=30/1 ! "
-            f"h264parse ! mppvideodec ! videoconvert ! appsink sync=False"
+            f"h264parse ! mppvideodec ! "
+            f"videorate ! video/x-raw,framerate=20/1 ! "
+            f"videoconvert ! appsink sync=false"
         )
 
         cap = cv2.VideoCapture(h264_pipeline, cv2.CAP_GSTREAMER)

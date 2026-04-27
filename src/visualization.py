@@ -51,9 +51,16 @@ class Visualizer:
         for x1, y1, x2, y2, conf, cls in detections:
             # Get color for class
             color = self.COLORS[cls % len(self.COLORS)]
-            
+
+            # Calculate and print center coordinates
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            print(f"[{self.config.class_names[cls]}] center=({cx}, {cy}) conf={conf:.2f}")
+
             # Draw bounding box
             cv2.rectangle(result, (x1, y1), (x2, y2), color, self.thickness)
+
+            # Draw large red solid circle at center
+            cv2.circle(result, (cx, cy), 15, (0, 0, 255), -1)
             
             # Draw label
             label = f"{self.config.class_names[cls]} {conf:.2f}"
